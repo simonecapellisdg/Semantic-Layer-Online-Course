@@ -1,92 +1,69 @@
-trigger:   
--main # set to a release branch
+name: Promote dbt Job
 
-pr: none
+on:
+  push:
+    branches:
+      - main # set to a release branch
+  workflow_dispatch:
+    inputs:
+      prd_job_id:
+        description: "PRD Job ID (leave empty to CREATE a new job)"
+        required: false
+        default: ""
 
-parameters:
-  - name: prd_job_id
-    displayName: "PRD Job ID (leave empty to CREATE a new job)"
-    type: string
-    default: ""
+# Global environment mapping to replace the ADO variable group 'dbt-cloud-secrets'
+env:
+  DBT_STG_TOKEN: ${{ secrets.DBT_STG_TOKEN }}
+  DBT_PRD_TOKEN: ${{ secrets.DBT_PRD_TOKEN }}
+  DBT_STG_ACCOUNT_ID: ${{ vars.DBT_STG_ACCOUNT_ID }}
+  DBT_PRD_ACCOUNT_ID: ${{ vars.DBT_PRD_ACCOUNT_ID }}
+  DBT_STG_JOB_ID: ${{ vars.DBT_STG_JOB_ID }}
+  DBT_PRD_ENV_ID: ${{ vars.DBT_PRD_ENV_ID }}
 
-variables:
-  - group: dbt-cloud-secrets
-
-pool:
-  vmImage: ubuntu-latest
-
-stages:
+jobs:
 
   # ── Stage 1: Validate & Preview ──────────────────────────────────────────
-  - stage: Validate
-    displayName: "Fetch & Preview STG Job"
-    jobs:
-      - job: Preview
-        displayName: "Preview job payload from STG"
-        steps:
-          - task: UsePythonVersion@0
-            inputs:
-              versionSpec: "3.11"
+  validate:
+    name: Fetch & Preview STG Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-          - script: pip install requests
-            displayName: "Install dependencies"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-          - script: python scripts/promote_dbt_job.py
-            displayName: "Preview STG job definition"
-            env:
-              DBT_STG_TOKEN:      $(DBT_STG_TOKEN)
-              DBT_PRD_TOKEN:      $(DBT_PRD_TOKEN)
-              DBT_STG_ACCOUNT_ID: $(DBT_STG_ACCOUNT_ID)
-              DBT_PRD_ACCOUNT_ID: $(DBT_PRD_ACCOUNT_ID)
-              DBT_STG_JOB_ID:     $(DBT_STG_JOB_ID)
-              DBT_PRD_ENV_ID:     $(DBT_PRD_ENV_ID)
-              DBT_PRD_JOB_ID:     ${{ parameters.prd_job_id }}
-            # DRY RUN: comment out the actual POST in the script during this stage
+      - name: Install dependencies
+        run: pip install requests
 
-  # ── Stage 2: Manual Approval Gate ────────────────────────────────────────
-  - stage: Approve
-    displayName: "Manual Approval"
-    dependsOn: Validate
-    jobs:
-      - job: WaitForApproval
-        displayName: "Waiting for release approval"
-        pool: server  # Agentless — just waits
-        steps:
-          - task: ManualValidation@0
-            timeoutInMinutes: 1440  # 24h window
-            inputs:
-              notifyUsers: |
-                your-team@yourcompany.com
-              instructions: "Review the STG job payload in the Validate stage logs. Approve to promote to PRD."
+      - name: Preview STG job definition
+        run: python scripts/promote_dbt_job.py
+        env:
+          DBT_PRD_JOB_ID: ${{ github.event.inputs.prd_job_id }}
+          DRY_RUN: "true" # Uses the safe preview check we added to the Python script
 
-  # ── Stage 3: Promote to PRD ───────────────────────────────────────────────
-  - stage: Promote
-    displayName: "Promote Job to PRD"
-    dependsOn: Approve
-    jobs:
-      - deployment: DeployToPRD
-        displayName: "Create/Update job in PRD"
-        environment: "dbt-prd"  # Tie to an ADO Environment for audit trail
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
+  # ── Stage 2 & 3: Manual Approval Gate & Promote to PRD ───────────────────
+  promote:
+    name: Promote Job to PRD
+    needs: validate # Ensures validation stage completes successfully first
+    runs-on: ubuntu-latest
+    environment: "dbt-prd" # Tie to a GitHub Environment for audit trail & manual approval gate
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-                - task: UsePythonVersion@0
-                  inputs:
-                    versionSpec: "3.11"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-                - script: pip install requests
-                  displayName: "Install dependencies"
+      - name: Install dependencies
+        run: pip install requests
 
-                - script: python scripts/promote_dbt_job.py
-                  displayName: "Promote STG → PRD"
-                  env:
-                    DBT_STG_TOKEN:      $(DBT_STG_TOKEN)
-                    DBT_PRD_TOKEN:      $(DBT_PRD_TOKEN)
-                    DBT_STG_ACCOUNT_ID: $(DBT_STG_ACCOUNT_ID)
-                    DBT_PRD_ACCOUNT_ID: $(DBT_PRD_ACCOUNT_ID)
-                    DBT_STG_JOB_ID:     $(DBT_STG_JOB_ID)
-                    DBT_PRD_ENV_ID:     $(DBT_PRD_ENV_ID)
-                    DBT_PRD_JOB_ID:     ${{ parameters.prd_job_id }}
+      - name: Promote STG → PRD
+        run: python scripts/promote_dbt_job.py
+        env:
+          DBT_PRD_JOB_ID: ${{ github.event.inputs.prd_job_id }}
+          DRY_RUN: "false" # Executes the live API requests to create/update
