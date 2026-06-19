@@ -1,8 +1,7 @@
-
-import requests
-import json
 import os
 import sys
+import json
+import requests
 
 # ── Config from environment variables ──────────────────────────────────────
 STG_TOKEN       = os.environ["DBT_STG_TOKEN"]
@@ -62,12 +61,21 @@ def update_prd_job(payload: dict):
 
 # ── Main ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    # Check if we are running a safe dry-run preview (defaults to false)
+    DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
+
     print("📥 Fetching STG job...")
     stg_job = get_stg_job()
-    print(json.dumps(stg_job, indent=2))  # Visible in pipeline logs for audit
 
     print("🔄 Transforming payload for PRD...")
     payload = transform_payload(stg_job)
+
+    print("📋 Transformed Payload Preview:")
+    print(json.dumps(payload, indent=2))  # Visible in pipeline logs for audit
+
+    if DRY_RUN:
+        print("🛑 Dry Run enabled. Skipping creation/update in PRD.")
+        sys.exit(0)
 
     if PRD_JOB_ID:
         print(f"♻️  Updating existing PRD job {PRD_JOB_ID}...")
