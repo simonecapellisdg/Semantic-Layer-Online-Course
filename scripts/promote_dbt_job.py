@@ -12,7 +12,7 @@ STG_JOB_ID      = os.environ["DBT_STG_JOB_ID"]
 PRD_ENV_ID      = os.environ["DBT_PRD_ENV_ID"]
 PRD_JOB_ID      = os.environ.get("DBT_PRD_JOB_ID")  # Optional: if updating existing job
 
-BASE_URL = "https://xe054.us1.dbt.com/api/v2"
+BASE_URL = "https://lq325.us1.dbt.com/api/v2"
 
 STG_HEADERS = {"Authorization": f"Token {STG_TOKEN}", "Content-Type": "application/json"}
 PRD_HEADERS = {"Authorization": f"Token {PRD_TOKEN}", "Content-Type": "application/json"}
