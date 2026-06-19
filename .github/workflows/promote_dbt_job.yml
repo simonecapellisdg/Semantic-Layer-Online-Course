@@ -1,0 +1,92 @@
+trigger:   
+-main # set to a release branch
+
+pr: none
+
+parameters:
+  - name: prd_job_id
+    displayName: "PRD Job ID (leave empty to CREATE a new job)"
+    type: string
+    default: ""
+
+variables:
+  - group: dbt-cloud-secrets
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+
+  # ── Stage 1: Validate & Preview ──────────────────────────────────────────
+  - stage: Validate
+    displayName: "Fetch & Preview STG Job"
+    jobs:
+      - job: Preview
+        displayName: "Preview job payload from STG"
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.11"
+
+          - script: pip install requests
+            displayName: "Install dependencies"
+
+          - script: python scripts/promote_dbt_job.py
+            displayName: "Preview STG job definition"
+            env:
+              DBT_STG_TOKEN:      $(DBT_STG_TOKEN)
+              DBT_PRD_TOKEN:      $(DBT_PRD_TOKEN)
+              DBT_STG_ACCOUNT_ID: $(DBT_STG_ACCOUNT_ID)
+              DBT_PRD_ACCOUNT_ID: $(DBT_PRD_ACCOUNT_ID)
+              DBT_STG_JOB_ID:     $(DBT_STG_JOB_ID)
+              DBT_PRD_ENV_ID:     $(DBT_PRD_ENV_ID)
+              DBT_PRD_JOB_ID:     ${{ parameters.prd_job_id }}
+            # DRY RUN: comment out the actual POST in the script during this stage
+
+  # ── Stage 2: Manual Approval Gate ────────────────────────────────────────
+  - stage: Approve
+    displayName: "Manual Approval"
+    dependsOn: Validate
+    jobs:
+      - job: WaitForApproval
+        displayName: "Waiting for release approval"
+        pool: server  # Agentless — just waits
+        steps:
+          - task: ManualValidation@0
+            timeoutInMinutes: 1440  # 24h window
+            inputs:
+              notifyUsers: |
+                your-team@yourcompany.com
+              instructions: "Review the STG job payload in the Validate stage logs. Approve to promote to PRD."
+
+  # ── Stage 3: Promote to PRD ───────────────────────────────────────────────
+  - stage: Promote
+    displayName: "Promote Job to PRD"
+    dependsOn: Approve
+    jobs:
+      - deployment: DeployToPRD
+        displayName: "Create/Update job in PRD"
+        environment: "dbt-prd"  # Tie to an ADO Environment for audit trail
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: "3.11"
+
+                - script: pip install requests
+                  displayName: "Install dependencies"
+
+                - script: python scripts/promote_dbt_job.py
+                  displayName: "Promote STG → PRD"
+                  env:
+                    DBT_STG_TOKEN:      $(DBT_STG_TOKEN)
+                    DBT_PRD_TOKEN:      $(DBT_PRD_TOKEN)
+                    DBT_STG_ACCOUNT_ID: $(DBT_STG_ACCOUNT_ID)
+                    DBT_PRD_ACCOUNT_ID: $(DBT_PRD_ACCOUNT_ID)
+                    DBT_STG_JOB_ID:     $(DBT_STG_JOB_ID)
+                    DBT_PRD_ENV_ID:     $(DBT_PRD_ENV_ID)
+                    DBT_PRD_JOB_ID:     ${{ parameters.prd_job_id }}
